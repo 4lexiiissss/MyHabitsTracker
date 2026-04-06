@@ -1,148 +1,215 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, {
+  createContext, useContext, useState,
+  useEffect, useCallback, ReactNode,
+} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Habit, HabitLogs, MoodLogs, MoodEntry, DayLog } from '@/constants/habits';
+import { formatDateKey } from '@/constants/habitUtils';
+import { scheduleHabitReminder, cancelHabitReminder, syncAllReminders } from '@/constants/notifications';
 
-// 1. Définition précise des types
-export type Habit = {
-  id: string;
-  name: string;
-  color: string;
-  frequency: string[]; // ['Daily'], ['Monday', 'Tuesday'], etc.
-  goalValue?: number;
-  unit?: string;
-  timesPerDay?: number;
-  difficulty?: number;
-  reminders?: boolean;
-  isMood?: boolean;
-};
+// ─── Seed data ────────────────────────────────────────────────────────────────
 
-export type LogEntry = {
-  progress: number;
-  isCompleted: boolean;
-  note?: string;
-  moodLevel?: number;
-};
+const SEED_HABITS: Habit[] = [
+  {
+    id: 'h1', name: 'Morning Run', icon: '🏃', description: 'Start the day with energy',
+    color: '#6C63FF', frequency: 'specific', days: [1, 3, 5],
+    timesPerDay: 1, quantity: false, unit: 'km', goalQty: 0,
+    nDays: 1, reminder: false, notes: '', difficulty: 2, createdAt: Date.now(),
+  },
+  {
+    id: 'h2', name: 'Drink Water', icon: '💧', description: 'Stay hydrated all day',
+    color: '#48CAE4', frequency: 'daily', days: [],
+    timesPerDay: 1, quantity: true, unit: 'L', goalQty: 3,
+    nDays: 1, reminder: false, notes: '', difficulty: 0, createdAt: Date.now(),
+  },
+  {
+    id: 'h3', name: 'Read', icon: '📚', description: '',
+    color: '#F4A261', frequency: 'daily', days: [],
+    timesPerDay: 1, quantity: true, unit: 'pages', goalQty: 20,
+    nDays: 1, reminder: false, notes: '', difficulty: 1, createdAt: Date.now(),
+  },
+];
 
-type HabitContextType = {
+// ─── Keys — prefixed per user so accounts are isolated ───────────────────────
+
+function makeKeys(userId: string) {
+  return {
+    HABITS: `@ht_habits_${userId}`,
+    LOGS:   `@ht_logs_${userId}`,
+    MOODS:  `@ht_moods_${userId}`,
+  };
+}
+
+// ─── Context types ────────────────────────────────────────────────────────────
+
+interface HabitContextValue {
   habits: Habit[];
-  logs: Record<string, Record<string, any>>; // Date -> HabitId -> Data
-  addHabit: (habit: Habit) => void;
-  updateHabit: (habit: Habit) => void;
-  deleteHabit: (id: string) => void;
-  reorderHabits: (newData: Habit[]) => void;
-  updateProgress: (date: string, habitId: string, value: number, goal?: number) => void;
-  updateMood: (date: string, level: number, note: string) => void;
+  logs: HabitLogs;
+  moods: MoodLogs;
   loading: boolean;
-};
 
-const HabitContext = createContext<HabitContextType | undefined>(undefined);
+  addHabit:      (habit: Omit<Habit, 'id' | 'createdAt'>) => Promise<void>;
+  updateHabit:   (habit: Habit) => Promise<void>;
+  deleteHabit:   (id: string) => Promise<void>;
+  reorderHabits: (habits: Habit[]) => Promise<void>;
 
-export const HabitProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  setDone: (habitId: string, date: Date, done: boolean) => Promise<void>;
+  setQty:  (habitId: string, date: Date, qty: number)  => Promise<void>;
+  setMood: (date: Date, entry: MoodEntry) => Promise<void>;
+}
+
+// ─── Context ──────────────────────────────────────────────────────────────────
+
+const HabitContext = createContext<HabitContextValue | null>(null);
+
+export function useHabits(): HabitContextValue {
+  const ctx = useContext(HabitContext);
+  if (!ctx) throw new Error('useHabits must be used inside HabitProvider');
+  return ctx;
+}
+
+// ─── Provider ─────────────────────────────────────────────────────────────────
+
+interface HabitProviderProps {
+  children: ReactNode;
+  userId?: string;   // passed from RootNavigator once user is known
+}
+
+export function HabitProvider({ children, userId }: HabitProviderProps) {
   const [habits, setHabits] = useState<Habit[]>([]);
-  const [logs, setLogs] = useState<Record<string, any>>({});
+  const [logs,   setLogs]   = useState<HabitLogs>({});
+  const [moods,  setMoods]  = useState<MoodLogs>({});
   const [loading, setLoading] = useState(true);
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
 
-  // Charger les données au démarrage
+  // Reload whenever userId changes (login / logout / switch account)
   useEffect(() => {
-    const loadData = async () => {
+    if (!userId) {
+      // No user → reset to empty, keep loading false
+      setHabits([]);
+      setLogs({});
+      setMoods({});
+      setLoading(false);
+      setLoadedUserId(null);
+      return;
+    }
+
+    if (userId === loadedUserId) return; // already loaded for this user
+
+    setLoading(true);
+    const keys = makeKeys(userId);
+
+    (async () => {
       try {
-        const savedHabits = await AsyncStorage.getItem('@habits_v1');
-        const savedLogs = await AsyncStorage.getItem('@logs_v1');
-        
-        if (savedHabits) {
-          setHabits(JSON.parse(savedHabits));
-        }
-        if (savedLogs) {
-          setLogs(JSON.parse(savedLogs));
-        }
+        const [rawHabits, rawLogs, rawMoods] = await Promise.all([
+          AsyncStorage.getItem(keys.HABITS),
+          AsyncStorage.getItem(keys.LOGS),
+          AsyncStorage.getItem(keys.MOODS),
+        ]);
+        setHabits(rawHabits ? JSON.parse(rawHabits) : SEED_HABITS);
+        setLogs(rawLogs    ? JSON.parse(rawLogs)    : {});
+        setMoods(rawMoods  ? JSON.parse(rawMoods)   : {});
+        setLoadedUserId(userId);
+        // Sync notifications for loaded habits
+        const loadedHabits = rawHabits ? JSON.parse(rawHabits) : SEED_HABITS;
+        syncAllReminders(loadedHabits).catch(() => {});
       } catch (e) {
-        console.error("Erreur lors du chargement des données", e);
+        console.error('HabitContext load error:', e);
+        setHabits(SEED_HABITS);
       } finally {
         setLoading(false);
       }
+    })();
+  }, [userId]);
+
+  // ── Persist helpers ────────────────────────────────────────────────────────
+
+  const persistHabits = useCallback(async (next: Habit[]) => {
+    if (!userId) return;
+    setHabits(next);
+    await AsyncStorage.setItem(makeKeys(userId).HABITS, JSON.stringify(next));
+  }, [userId]);
+
+  const persistLogs = useCallback(async (next: HabitLogs) => {
+    if (!userId) return;
+    setLogs(next);
+    await AsyncStorage.setItem(makeKeys(userId).LOGS, JSON.stringify(next));
+  }, [userId]);
+
+  const persistMoods = useCallback(async (next: MoodLogs) => {
+    if (!userId) return;
+    setMoods(next);
+    await AsyncStorage.setItem(makeKeys(userId).MOODS, JSON.stringify(next));
+  }, [userId]);
+
+  // ── Habits CRUD ────────────────────────────────────────────────────────────
+
+  const addHabit = useCallback(async (data: Omit<Habit, 'id' | 'createdAt'>) => {
+    const newHabit: Habit = { ...data, id: 'h' + Date.now(), createdAt: Date.now() };
+    await persistHabits([...habits, newHabit]);
+    if (newHabit.reminder) scheduleHabitReminder(newHabit).catch(() => {});
+  }, [habits, persistHabits]);
+
+  const updateHabit = useCallback(async (updated: Habit) => {
+    await persistHabits(habits.map(h => h.id === updated.id ? updated : h));
+    // Re-sync reminder: schedule if enabled, cancel if disabled
+    if (updated.reminder) scheduleHabitReminder(updated).catch(() => {});
+    else cancelHabitReminder(updated.id).catch(() => {});
+  }, [habits, persistHabits]);
+
+  const deleteHabit = useCallback(async (id: string) => {
+    await persistHabits(habits.filter(h => h.id !== id));
+    cancelHabitReminder(id).catch(() => {});
+    const nextLogs = { ...logs };
+    delete nextLogs[id];
+    await persistLogs(nextLogs);
+  }, [habits, logs, persistHabits, persistLogs]);
+
+  const reorderHabits = useCallback(async (reordered: Habit[]) => {
+    await persistHabits(reordered);
+  }, [persistHabits]);
+
+  // ── Logs ───────────────────────────────────────────────────────────────────
+
+  const setDone = useCallback(async (habitId: string, date: Date, done: boolean) => {
+    const key = formatDateKey(date);
+    const nextLogs: HabitLogs = {
+      ...logs,
+      [habitId]: { ...(logs[habitId] ?? {}), [key]: { ...(logs[habitId]?.[key] ?? {}), done } },
     };
-    loadData();
-  }, []);
+    await persistLogs(nextLogs);
+  }, [logs, persistLogs]);
 
-  // Sauvegarder automatiquement dès que 'habits' ou 'logs' change
-  useEffect(() => {
-    if (!loading) {
-      AsyncStorage.setItem('@habits_v1', JSON.stringify(habits));
-    }
-  }, [habits, loading]);
-
-  useEffect(() => {
-    if (!loading) {
-      AsyncStorage.setItem('@logs_v1', JSON.stringify(logs));
-    }
-  }, [logs, loading]);
-
-  // --- ACTIONS ---
-
-  const addHabit = (habit: Habit) => {
-    setHabits((prev) => [...prev, habit]);
-  };
-
-  const updateHabit = (updatedHabit: Habit) => {
-    setHabits((prev) =>
-      prev.map((h) => (h.id === updatedHabit.id ? updatedHabit : h))
-    );
-  };
-
-  const deleteHabit = (id: string) => {
-    setHabits((prev) => prev.filter((h) => h.id !== id));
-  };
-
-  const reorderHabits = (newData: Habit[]) => {
-    setHabits(newData);
-  };
-
-  const updateProgress = (date: string, habitId: string, value: number, goal?: number) => {
-    setLogs((prev) => ({
-      ...prev,
-      [date]: {
-        ...prev[date],
-        [habitId]: {
-          progress: value,
-          isCompleted: goal ? value >= goal : true,
-        },
+  const setQty = useCallback(async (habitId: string, date: Date, qty: number) => {
+    const habit = habits.find(h => h.id === habitId);
+    const key = formatDateKey(date);
+    const safeQty = Math.max(0, qty);
+    const done = habit ? safeQty >= habit.goalQty : false;
+    const nextLogs: HabitLogs = {
+      ...logs,
+      [habitId]: {
+        ...(logs[habitId] ?? {}),
+        [key]: { ...(logs[habitId]?.[key] ?? {}), qty: safeQty, done },
       },
-    }));
-  };
+    };
+    await persistLogs(nextLogs);
+  }, [habits, logs, persistLogs]);
 
-  const updateMood = (date: string, level: number, note: string) => {
-    setLogs((prev) => ({
-      ...prev,
-      [date]: {
-        ...prev[date],
-        mood: { level, note },
-      },
-    }));
-  };
+  // ── Mood ───────────────────────────────────────────────────────────────────
+
+  const setMood = useCallback(async (date: Date, entry: MoodEntry) => {
+    const key = formatDateKey(date);
+    const nextMoods: MoodLogs = { ...moods, [key]: entry };
+    await persistMoods(nextMoods);
+  }, [moods, persistMoods]);
 
   return (
-    <HabitContext.Provider
-      value={{
-        habits,
-        logs,
-        addHabit,
-        updateHabit,
-        deleteHabit,
-        reorderHabits,
-        updateProgress,
-        updateMood,
-        loading,
-      }}
-    >
+    <HabitContext.Provider value={{
+      habits, logs, moods, loading,
+      addHabit, updateHabit, deleteHabit, reorderHabits,
+      setDone, setQty, setMood,
+    }}>
       {children}
     </HabitContext.Provider>
   );
-};
-
-// Hook personnalisé pour utiliser le contexte
-export const useHabits = () => {
-  const context = useContext(HabitContext);
-  if (!context) {
-    throw new Error('useHabits must be used within a HabitProvider');
-  }
-  return context;
-};
+}

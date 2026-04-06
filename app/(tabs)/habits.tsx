@@ -1,321 +1,727 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, Modal, TextInput, ScrollView, Switch } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Slider from '@react-native-community/slider';
-import * as Haptics from 'expo-haptics';
-import { useHabits, Habit } from '../../context/HabitContext';
+import {
+  View, Text, ScrollView, StyleSheet, TouchableOpacity,
+  TextInput, Modal, Pressable, Switch, Alert, StatusBar,
+  KeyboardAvoidingView, Platform,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useHabits } from '@/context/HabitContext';
+import { Habit, HABIT_COLORS, HABIT_ICONS, UNITS, DIFFICULTIES, DAY_NAMES } from '@/constants/habits';
+import { FrequencyType } from '@/constants/habits';
 
-const COLORS = ['#5856D6', '#FF9500', '#FF2D55', '#34C759', '#5AC8FA', '#AF52DE'];
-const UNITS = ['L', 'g', 'min', 'h', 'km', 'pages', 'qty'];
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+// ─── Dark theme tokens ────────────────────────────────────────────────────────
 
-export default function HabitsScreen() {
-  const { habits, addHabit, deleteHabit, reorderHabits, updateHabit } = useHabits();
-  const [modalVisible, setModalVisible] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  
-  // Form States
-  const [name, setName] = useState('');
-  const [color, setColor] = useState(COLORS[0]);
-  const [goal, setGoal] = useState('');
-  const [unit, setUnit] = useState('qty');
-  const [frequencyType, setFrequencyType] = useState<'Daily' | 'Weekly' | 'Specific' | 'N-Days'>('Daily');
-  const [selectedDays, setSelectedDays] = useState<string[]>(DAYS);
-  const [nDays, setNDays] = useState('1');
-  const [timesPerDay, setTimesPerDay] = useState('1');
-  const [difficulty, setDifficulty] = useState(1);
-  const [reminders, setReminders] = useState(false);
-  const [notes, setNotes] = useState('');
+const D = {
+  bg:        '#111111',
+  surface:   '#1C1C1E',
+  surface2:  '#2C2C2E',
+  border:    '#3A3A3C',
+  text:      '#FFFFFF',
+  textSub:   '#8E8E93',
+  textHint:  '#48484A',
+};
 
-  // CORRECTION: Reset et chargement propre des données
-  const openEdit = (habit: Habit) => {
-    setEditingId(habit.id);
-    setName(habit.name || '');
-    setColor(habit.color || COLORS[0]);
-    // On force la conversion en string pour l'affichage dans l'input
-    setGoal(habit.goalValue ? habit.goalValue.toString() : '');
-    setUnit(habit.unit || 'qty');
-    setDifficulty(habit.difficulty || 1);
-    setFrequencyType((habit.frequency?.[0] as any) || 'Daily');
-    setTimesPerDay(habit.timesPerDay ? habit.timesPerDay.toString() : '1');
-    setReminders(!!habit.reminders);
-    setNotes(habit.notes || '');
-    setModalVisible(true);
-  };
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-  const handleSave = () => {
-    if (!name) return;
-    const habitData: Habit = {
-      id: editingId || Date.now().toString(),
-      name,
-      color,
-      frequency: [frequencyType],
-      goalValue: goal !== '' ? parseFloat(goal) : undefined,
-      unit: goal !== '' ? unit : undefined,
-      difficulty,
-      timesPerDay: parseInt(timesPerDay) || 1,
-      reminders,
-      notes,
-    };
+type HabitFormData = Omit<Habit, 'id' | 'createdAt'>;
 
-    if (editingId) {
-      updateHabit(habitData);
-    } else {
-      addHabit(habitData);
-    }
-    closeModal();
-  };
+const BLANK: HabitFormData = {
+  name: '', icon: '⭐', description: '', color: '#FF2D55',
+  frequency: 'daily', days: [], timesPerDay: 1,
+  quantity: false, unit: 'min', goalQty: 30, nDays: 2,
+  reminder: false, notes: '', difficulty: 1,
+};
 
-  const closeModal = () => {
-    setModalVisible(false);
-    setEditingId(null);
-    setName('');
-    setGoal('');
-    setUnit('qty');
-    setNotes('');
-    setDifficulty(1);
-    setFrequencyType('Daily');
-    setTimesPerDay('1');
-    setNDays('1');
-    setSelectedDays(DAYS);
-  };
+// ─── Preview Card ─────────────────────────────────────────────────────────────
 
-  const toggleDay = (day: string) => {
-    setSelectedDays(prev => 
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
-    );
-  };
-
-  const renderItem = ({ item, drag, isActive }: RenderItemParams<Habit>) => {
-    return (
-      <ScaleDecorator>
-        <TouchableOpacity 
-          onLongPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            drag();
-          }}
-          disabled={isActive}
-          style={[styles.habitItem, isActive && styles.activeItem]}
-        >
-          <Ionicons name="menu" size={20} color="#C7C7CC" style={{ marginRight: 10 }} />
-          <View style={[styles.colorDot, { backgroundColor: item.color }]} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.habitName}>{item.name}</Text>
-            <Text style={styles.habitSub}>
-               {item.frequency?.[0]} • {item.goalValue ? `${item.goalValue}${item.unit}` : 'Checklist'}
-            </Text>
-          </View>
-          <View style={styles.actionButtons}>
-            <TouchableOpacity onPress={() => openEdit(item)} style={styles.iconBtn}>
-              <Ionicons name="pencil" size={18} color="#5856D6" />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => deleteHabit(item.id)} style={styles.iconBtn}>
-              <Ionicons name="trash-outline" size={18} color="#FF3B30" />
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </ScaleDecorator>
-    );
-  };
+function HabitPreview({ form }: { form: HabitFormData }) {
+  const name = form.name.trim() || 'Habit name';
+  const freqText = form.frequency === 'daily' ? 'Every day' :
+    form.frequency === 'specific' ? (form.days.map(d => DAY_NAMES[d]).join(', ') || 'No days') :
+    `Every ${form.nDays} days`;
+  const goalText = form.quantity ? `, ${form.goalQty} ${form.unit}` : '';
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <View style={styles.container}>
-        <DraggableFlatList
-          data={habits}
-          onDragEnd={({ data }) => reorderHabits(data)}
-          keyExtractor={(item) => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={{ paddingBottom: 100 }}
-          ListEmptyComponent={<Text style={styles.emptyText}>No habits found. Tap + to create one.</Text>}
-        />
-
-        <TouchableOpacity style={styles.fab} onPress={() => setModalVisible(true)}>
-          <Ionicons name="add" size={30} color="white" />
-        </TouchableOpacity>
-
-        <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{editingId ? 'Edit Habit' : 'New Habit'}</Text>
-              <TouchableOpacity onPress={closeModal}>
-                <Text style={styles.closeText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              <Text style={styles.label}>HABIT NAME</Text>
-              <TextInput 
-                style={styles.input} 
-                placeholder="E.g. Drink Water" 
-                placeholderTextColor="#8E8E93" 
-                value={name} 
-                onChangeText={setName} 
-              />
-              
-              <Text style={styles.label}>COLOR</Text>
-              <View style={styles.colorRow}>
-                {COLORS.map(c => (
-                  <TouchableOpacity 
-                    key={c} 
-                    style={[styles.colorOption, { backgroundColor: c }, color === c && styles.selectedColor]} 
-                    onPress={() => setColor(c)} 
-                  />
-                ))}
-              </View>
-
-              <Text style={styles.label}>FREQUENCY</Text>
-              <View style={styles.freqContainer}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom: 10}}>
-                  {['Daily', 'Weekly', 'Specific', 'N-Days'].map((type) => (
-                    <TouchableOpacity 
-                      key={type} 
-                      style={[styles.typeBtn, frequencyType === type && styles.selectedType]} 
-                      onPress={() => setFrequencyType(type as any)}
-                    >
-                      <Text style={[styles.typeText, frequencyType === type && {color: 'white'}]}>{type}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-                
-                {frequencyType === 'Specific' && (
-                  <View style={styles.daysRow}>
-                    {DAYS.map(day => (
-                      <TouchableOpacity 
-                        key={day} 
-                        style={[styles.dayCircle, selectedDays.includes(day) && styles.selectedDayCircle]} 
-                        onPress={() => toggleDay(day)}
-                      >
-                        <Text style={[styles.dayText, selectedDays.includes(day) && {color: 'white'}]}>{day[0]}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-                
-                {frequencyType === 'N-Days' && (
-                  <View style={styles.row}>
-                    <Text style={{color: '#1C1C1E'}}>Every </Text>
-                    <TextInput 
-                      style={[styles.input, {flex: 0.3, marginBottom: 0, paddingVertical: 5, textAlign: 'center'}]} 
-                      keyboardType="numeric" 
-                      value={nDays} 
-                      onChangeText={setNDays} 
-                    />
-                    <Text style={{color: '#1C1C1E'}}> days</Text>
-                  </View>
-                )}
-              </View>
-
-              <Text style={styles.label}>GOAL & QUANTITY</Text>
-              <View style={styles.row}>
-                <TextInput 
-                  style={[styles.input, {flex: 1, marginBottom: 0, borderBottomColor: '#5856D6', borderBottomWidth: 1}]} 
-                  placeholder="Value (e.g. 3)" 
-                  placeholderTextColor="#8E8E93"
-                  keyboardType="numeric" 
-                  value={goal} // CORRECTION: Liaison stricte avec l'état local
-                  onChangeText={(text) => setGoal(text)} 
-                />
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.unitScroll}>
-                  {UNITS.map(u => (
-                    <TouchableOpacity 
-                      key={u} 
-                      style={[styles.unitBtn, unit === u && styles.selectedUnit]} 
-                      onPress={() => setUnit(u)}
-                    >
-                      <Text style={[styles.unitText, unit === u && { color: 'white' }]}>{u}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-              {goal !== '' && (
-                <Text style={styles.previewText}>Target: {goal} {unit} per day</Text>
-              )}
-
-              <Text style={styles.label}>TIMES PER DAY</Text>
-              <TextInput 
-                style={styles.input} 
-                keyboardType="numeric" 
-                value={timesPerDay} // CORRECTION: Liaison stricte
-                onChangeText={setTimesPerDay} 
-              />
-
-              <Text style={styles.label}>DIFFICULTY: {difficulty}</Text>
-              <Slider
-                style={{width: '100%', height: 40}}
-                minimumValue={1}
-                maximumValue={5}
-                step={1}
-                value={difficulty}
-                onValueChange={setDifficulty}
-                minimumTrackTintColor="#5856D6"
-                maximumTrackTintColor="#D1D1D6"
-                thumbTintColor="#5856D6"
-              />
-
-              <View style={styles.switchRow}>
-                <Text style={styles.label}>REMINDERS & NOTIFICATIONS</Text>
-                <Switch value={reminders} onValueChange={setReminders} trackColor={{ false: "#D1D1D6", true: "#5856D6" }} />
-              </View>
-
-              <Text style={styles.label}>NOTES</Text>
-              <TextInput 
-                style={[styles.input, { height: 80, paddingTop: 15 }]} 
-                placeholder="Why do you want to track this?" 
-                placeholderTextColor="#8E8E93"
-                multiline 
-                value={notes} 
-                onChangeText={setNotes} 
-              />
-
-              <TouchableOpacity style={styles.createBtn} onPress={handleSave}>
-                <Text style={styles.createBtnText}>{editingId ? 'Save Changes' : 'Create Habit'}</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </Modal>
+    <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+      <Text style={[formStyles.sectionTitle, { marginBottom: 8 }]}>Preview</Text>
+      <View style={[formStyles.previewCard, { backgroundColor: form.color }]}>
+        <View style={formStyles.previewIconCircle}>
+          <Text style={{ fontSize: 22 }}>{form.icon}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={formStyles.previewName} numberOfLines={1}>{name}</Text>
+          <Text style={formStyles.previewSub}>{freqText}{goalText}</Text>
+        </View>
+        <Text style={formStyles.previewEdit}>✎</Text>
       </View>
-    </GestureHandlerRootView>
+      {form.description.trim() ? (
+        <Text style={formStyles.previewDesc} numberOfLines={2}>{form.description}</Text>
+      ) : null}
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F7', paddingHorizontal: 15 },
-  habitItem: { backgroundColor: 'white', padding: 16, borderRadius: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  activeItem: { backgroundColor: '#E5E5EA', transform: [{scale: 1.02}] },
-  colorDot: { width: 14, height: 14, borderRadius: 7, marginRight: 15 },
-  habitName: { fontSize: 17, fontWeight: '600', color: '#1C1C1E' },
-  habitSub: { fontSize: 13, color: '#8E8E93', marginTop: 2 },
-  actionButtons: { flexDirection: 'row', gap: 10 },
-  iconBtn: { padding: 8, backgroundColor: '#F2F2F7', borderRadius: 8 },
-  fab: { position: 'absolute', bottom: 30, right: 30, width: 64, height: 64, borderRadius: 32, backgroundColor: '#5856D6', justifyContent: 'center', alignItems: 'center', elevation: 5 },
-  modalContent: { flex: 1, padding: 20, backgroundColor: '#F2F2F7' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
-  modalTitle: { fontSize: 22, fontWeight: 'bold' },
-  closeText: { color: '#5856D6', fontSize: 16 },
-  label: { fontSize: 13, color: '#8E8E93', fontWeight: 'bold', marginTop: 22, marginBottom: 8 },
-  input: { backgroundColor: 'white', padding: 15, borderRadius: 12, fontSize: 16, marginBottom: 10, color: '#000' },
-  previewText: { fontSize: 12, color: '#5856D6', fontWeight: '600', marginTop: -5, marginLeft: 5 },
-  colorRow: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 10 },
-  colorOption: { width: 40, height: 40, borderRadius: 20 },
-  selectedColor: { borderWidth: 3, borderColor: '#1C1C1E' },
-  freqContainer: { backgroundColor: 'white', padding: 15, borderRadius: 12 },
-  typeBtn: { paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F2F2F7', marginRight: 8 },
-  selectedType: { backgroundColor: '#5856D6' },
-  typeText: { fontSize: 14, fontWeight: '500' },
-  daysRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  dayCircle: { width: 35, height: 35, borderRadius: 18, backgroundColor: '#F2F2F7', justifyContent: 'center', alignItems: 'center' },
-  selectedDayCircle: { backgroundColor: '#5856D6' },
-  dayText: { fontSize: 12, fontWeight: 'bold' },
-  row: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  unitScroll: { marginLeft: 5 },
-  unitBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: '#F2F2F7', marginRight: 5 },
-  selectedUnit: { backgroundColor: '#5856D6' },
-  unitText: { fontSize: 12, fontWeight: '600' },
-  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
-  createBtn: { backgroundColor: '#5856D6', padding: 18, borderRadius: 16, marginTop: 40, marginBottom: 40, alignItems: 'center' },
-  createBtnText: { color: 'white', fontWeight: 'bold', fontSize: 17 },
-  emptyText: { textAlign: 'center', marginTop: 50, color: '#8E8E93' }
+// ─── Settings Row ─────────────────────────────────────────────────────────────
+
+function SettingsRow({ icon, iconBg, label, value, onPress, last, children }: {
+  icon: string; iconBg: string; label: string;
+  value?: React.ReactNode; onPress?: () => void;
+  last?: boolean; children?: React.ReactNode;
+}) {
+  const content = (
+    <View style={[formStyles.row, last && { borderBottomWidth: 0 }]}>
+      <View style={[formStyles.rowIcon, { backgroundColor: iconBg }]}>
+        <Text style={{ fontSize: 14 }}>{icon}</Text>
+      </View>
+      <Text style={formStyles.rowLabel}>{label}</Text>
+      <View style={formStyles.rowRight}>
+        {typeof value === 'string' || typeof value === 'number'
+          ? <Text style={formStyles.rowValue}>{value}</Text>
+          : value}
+        <Text style={formStyles.rowChevron}>›</Text>
+      </View>
+    </View>
+  );
+  if (children) return <View>{content}{children}</View>;
+  if (onPress) return <TouchableOpacity onPress={onPress} activeOpacity={0.6}>{content}</TouchableOpacity>;
+  return content;
+}
+
+// ─── Section ──────────────────────────────────────────────────────────────────
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <View style={{ paddingHorizontal: 20, marginBottom: 28 }}>
+      <Text style={formStyles.sectionTitle}>{title}</Text>
+      <View style={formStyles.sectionCard}>
+        {children}
+      </View>
+    </View>
+  );
+}
+
+// ─── Icon Picker Modal ────────────────────────────────────────────────────────
+
+function IconPickerModal({ visible, current, color, onSelect, onClose }: {
+  visible: boolean; current: string; color: string;
+  onSelect: (i: string) => void; onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={pickerStyles.overlay}>
+        <View style={pickerStyles.sheet}>
+          <View style={pickerStyles.handle} />
+          <Text style={pickerStyles.title}>Choose an Icon</Text>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <View style={pickerStyles.grid}>
+              {HABIT_ICONS.map(icon => (
+                <TouchableOpacity key={icon} onPress={() => { onSelect(icon); onClose(); }}
+                  style={[pickerStyles.cell, current === icon && { backgroundColor: color + '33', borderColor: color }]}>
+                  <Text style={{ fontSize: 28 }}>{icon}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Color Picker Modal ───────────────────────────────────────────────────────
+
+const ALL_COLORS = [
+  '#FF2D55','#FF6B6B','#FF9500','#FFCC00','#34C759','#06D6A0',
+  '#2DC653','#48CAE4','#007AFF','#6C63FF','#4361EE','#5856D6',
+  '#AF52DE','#B5179E','#FF375F','#E76F51','#F77F00','#F4A261',
+  '#A8DADC','#457B9D','#2D6A4F','#52B788','#343A40','#8E8E93',
+];
+
+function ColorPickerModal({ visible, current, onSelect, onClose }: {
+  visible: boolean; current: string;
+  onSelect: (c: string) => void; onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={pickerStyles.overlay}>
+        <View style={pickerStyles.sheet}>
+          <View style={pickerStyles.handle} />
+          <Text style={pickerStyles.title}>Choose a Color</Text>
+          <View style={[pickerStyles.colorPreview, { backgroundColor: current }]}>
+            <Text style={pickerStyles.colorPreviewText}>Preview</Text>
+          </View>
+          <View style={pickerStyles.colorGrid}>
+            {ALL_COLORS.map(c => (
+              <TouchableOpacity key={c} onPress={() => { onSelect(c); onClose(); }}
+                style={[pickerStyles.colorDot, { backgroundColor: c },
+                  current === c && pickerStyles.colorDotActive]}>
+                {current === c && <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>✓</Text>}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Description Modal ────────────────────────────────────────────────────────
+
+function DescriptionModal({ visible, value, onChange, onClose }: {
+  visible: boolean; value: string;
+  onChange: (v: string) => void; onClose: () => void;
+}) {
+  const [text, setText] = useState(value);
+  React.useEffect(() => { if (visible) setText(value); }, [visible]);
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <Pressable style={pickerStyles.overlay} onPress={onClose}>
+          <Pressable style={pickerStyles.sheet} onPress={e => e.stopPropagation()}>
+            <View style={pickerStyles.handle} />
+            <Text style={pickerStyles.title}>Description</Text>
+            <TextInput
+              style={descStyles.input}
+              value={text}
+              onChangeText={setText}
+              placeholder="What is this habit about? (optional)"
+              placeholderTextColor="#48484A"
+              multiline
+              autoFocus
+              maxLength={200}
+              textAlignVertical="top"
+              scrollEnabled
+            />
+            <Text style={descStyles.counter}>{text.length}/200</Text>
+            <TouchableOpacity
+              style={descStyles.saveBtn}
+              onPress={() => { onChange(text); onClose(); }}
+            >
+              <Text style={descStyles.saveBtnText}>Done</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+const descStyles = StyleSheet.create({
+  input: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#3A3A3C',
+    padding: 14,
+    color: '#FFFFFF',
+    fontSize: 15,
+    minHeight: 120,
+    maxHeight: 200,
+    textAlignVertical: 'top',
+    marginBottom: 6,
+  },
+  counter: { fontSize: 12, color: '#8E8E93', textAlign: 'right', marginBottom: 16 },
+  saveBtn: { backgroundColor: '#6C63FF', borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+  saveBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
+});
+
+// ─── Days Picker (inline) ─────────────────────────────────────────────────────
+
+function DaysPicker({ days, color, onChange }: {
+  days: number[]; color: string; onChange: (days: number[]) => void;
+}) {
+  const toggle = (d: number) =>
+    onChange(days.includes(d) ? days.filter(x => x !== d) : [...days, d]);
+  return (
+    <View style={daysStyles.container}>
+      {DAY_NAMES.map((d, i) => (
+        <TouchableOpacity key={d} onPress={() => toggle(i)}
+          style={[daysStyles.btn, days.includes(i) && { backgroundColor: color }]}>
+          <Text style={[daysStyles.text, days.includes(i) && { color: '#fff', fontWeight: '700' }]}>{d}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  );
+}
+
+const daysStyles = StyleSheet.create({
+  container: { flexDirection: 'row', gap: 5, paddingHorizontal: 14, paddingBottom: 14 },
+  btn: { flex: 1, paddingVertical: 8, borderRadius: 8, backgroundColor: D.surface2, alignItems: 'center' },
+  text: { fontSize: 11, fontWeight: '600', color: D.textSub },
+});
+
+// ─── Habit Form ───────────────────────────────────────────────────────────────
+
+function HabitForm({ initial, onSave, onClose }: {
+  initial?: HabitFormData;
+  onSave: (data: HabitFormData) => void;
+  onClose: () => void;
+}) {
+  const insets = useSafeAreaInsets(); // ← insets réels de l'appareil
+  const [form, setForm] = useState<HabitFormData>(initial ? { ...BLANK, ...initial } : BLANK);
+  const set = <K extends keyof HabitFormData>(k: K, v: HabitFormData[K]) =>
+    setForm(f => ({ ...f, [k]: v }));
+
+  const [iconOpen,  setIconOpen]  = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
+  const [descOpen,  setDescOpen]  = useState(false);
+  const [nameLen,   setNameLen]   = useState(form.name.length);
+
+  const canSave = form.name.trim().length > 0;
+
+  const freqLabel = form.frequency === 'daily' ? 'Every day' :
+    form.frequency === 'specific' ? (form.days.length > 0 ? form.days.map(d => DAY_NAMES[d]).join(', ') : 'Choose days') :
+    `Every ${form.nDays} days`;
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Header — paddingTop = inset réel de l'appareil (Dynamic Island, notch...) */}
+      <View style={[formStyles.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={onClose} style={formStyles.headerBack}>
+          <Text style={formStyles.headerBackText}>‹</Text>
+        </TouchableOpacity>
+        <Text style={formStyles.headerTitle}>{initial ? 'Edit Habit' : 'Add Habit'}</Text>
+        <TouchableOpacity
+          style={[formStyles.headerSave, { backgroundColor: canSave ? form.color : D.surface2 }]}
+          onPress={() => canSave && onSave(form)}
+          disabled={!canSave}
+        >
+          <Text style={[formStyles.headerSaveText, !canSave && { color: D.textSub }]}>✓</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+
+        {/* Name input */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 4 }}>
+          <TextInput
+            style={formStyles.nameInput}
+            placeholder="Habit name..."
+            placeholderTextColor={D.textHint}
+            value={form.name}
+            onChangeText={v => { set('name', v); setNameLen(v.length); }}
+            maxLength={100}
+            autoFocus={!initial}
+          />
+          <Text style={formStyles.nameCounter}>{nameLen}/100</Text>
+        </View>
+
+        {/* Preview */}
+        <HabitPreview form={form} />
+
+        {/* Appearance */}
+        <Section title="Appearance">
+          <SettingsRow
+            icon="🎨" iconBg="#5E35B1"
+            label="Color"
+            value={<View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: form.color }} />}
+            onPress={() => setColorOpen(true)}
+          />
+          <SettingsRow
+            icon="🖼" iconBg="#E53935"
+            label="Icon"
+            value={<Text style={{ fontSize: 20 }}>{form.icon}</Text>}
+            onPress={() => setIconOpen(true)}
+          />
+          <SettingsRow
+            icon="📝" iconBg="#E65100"
+            label="Description"
+            value={form.description.trim() || 'Empty'}
+            onPress={() => setDescOpen(true)}
+            last
+          />
+        </Section>
+
+        {/* General */}
+        <Section title="General">
+          {/* Frequency */}
+          <SettingsRow
+            icon="🔁" iconBg="#1565C0"
+            label="Repeat"
+            value={freqLabel}
+          >
+            {/* Inline frequency selector */}
+            <View style={formStyles.inlineSelector}>
+              {([['daily','Every day'],['specific','Specific'],['every_n','Every N']] as [FrequencyType, string][]).map(([v, l]) => (
+                <TouchableOpacity key={v} onPress={() => set('frequency', v)}
+                  style={[formStyles.inlineBtn, form.frequency === v && { backgroundColor: form.color }]}>
+                  <Text style={[formStyles.inlineBtnText, form.frequency === v && { color: '#fff' }]}>{l}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {form.frequency === 'specific' && (
+              <DaysPicker days={form.days} color={form.color} onChange={d => set('days', d)} />
+            )}
+            {form.frequency === 'every_n' && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingBottom: 14 }}>
+                <Text style={{ color: D.textSub, fontSize: 14 }}>Every</Text>
+                <TextInput
+                  style={formStyles.nDaysInput}
+                  keyboardType="number-pad"
+                  value={String(form.nDays)}
+                  onChangeText={v => set('nDays', parseInt(v) || 2)}
+                />
+                <Text style={{ color: D.textSub, fontSize: 14 }}>days</Text>
+              </View>
+            )}
+          </SettingsRow>
+
+          {/* Quantity toggle */}
+          <View style={[formStyles.row, { paddingVertical: 14 }]}>
+            <View style={[formStyles.rowIcon, { backgroundColor: '#2E7D32' }]}>
+              <Text style={{ fontSize: 14 }}>🎯</Text>
+            </View>
+            <Text style={formStyles.rowLabel}>Goal / Quantity</Text>
+            <Switch
+              value={form.quantity}
+              onValueChange={v => set('quantity', v)}
+              trackColor={{ false: D.surface2, true: form.color + 'AA' }}
+              thumbColor={form.quantity ? form.color : '#8E8E93'}
+            />
+          </View>
+
+          {form.quantity && (
+            <View style={formStyles.goalRow}>
+              <TextInput
+                style={formStyles.goalInput}
+                keyboardType="decimal-pad"
+                value={String(form.goalQty)}
+                onChangeText={v => set('goalQty', parseFloat(v) || 1)}
+                placeholderTextColor={D.textHint}
+              />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  {UNITS.filter(u => u).map(u => (
+                    <TouchableOpacity key={u} onPress={() => set('unit', u)}
+                      style={[formStyles.unitChip, form.unit === u && { backgroundColor: form.color + '33', borderColor: form.color }]}>
+                      <Text style={[formStyles.unitText, form.unit === u && { color: form.color }]}>{u}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Difficulty */}
+          <View style={[formStyles.row, { flexDirection: 'column', alignItems: 'flex-start', paddingBottom: 12 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              <View style={[formStyles.rowIcon, { backgroundColor: '#AD1457' }]}>
+                <Text style={{ fontSize: 14 }}>💪</Text>
+              </View>
+              <Text style={formStyles.rowLabel}>Difficulty — <Text style={{ color: form.color }}>{DIFFICULTIES[form.difficulty]}</Text></Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 6, paddingLeft: 50 }}>
+              {DIFFICULTIES.map((d, i) => (
+                <TouchableOpacity key={d} onPress={() => set('difficulty', i)}
+                  style={[formStyles.diffBtn, form.difficulty === i && { backgroundColor: form.color }]}>
+                  <Text style={[formStyles.diffText, form.difficulty === i && { color: '#fff' }]}>{i + 1}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* Reminder */}
+          <View style={[formStyles.row, { borderBottomWidth: 0, paddingVertical: 14 }]}>
+            <View style={[formStyles.rowIcon, { backgroundColor: '#6A1B9A' }]}>
+              <Text style={{ fontSize: 14 }}>🔔</Text>
+            </View>
+            <Text style={formStyles.rowLabel}>Reminder</Text>
+            <Switch
+              value={form.reminder}
+              onValueChange={v => set('reminder', v)}
+              trackColor={{ false: D.surface2, true: form.color + 'AA' }}
+              thumbColor={form.reminder ? form.color : '#8E8E93'}
+            />
+          </View>
+        </Section>
+
+      </ScrollView>
+
+      {/* Modals */}
+      <IconPickerModal visible={iconOpen} current={form.icon} color={form.color}
+        onSelect={i => set('icon', i)} onClose={() => setIconOpen(false)} />
+      <ColorPickerModal visible={colorOpen} current={form.color}
+        onSelect={c => set('color', c)} onClose={() => setColorOpen(false)} />
+      <DescriptionModal visible={descOpen} value={form.description}
+        onChange={v => set('description', v)} onClose={() => setDescOpen(false)} />
+    </View>
+  );
+}
+
+// ─── Form styles ──────────────────────────────────────────────────────────────
+
+const formStyles = StyleSheet.create({
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingBottom: 14,
+  },
+  headerBack: { width: 36, height: 36, borderRadius: 18, backgroundColor: D.surface2, alignItems: 'center', justifyContent: 'center' },
+  headerBackText: { color: D.text, fontSize: 22, fontWeight: '600', marginTop: -2 },
+  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', color: D.text },
+  headerSave: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  headerSaveText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+
+  nameInput: {
+    fontSize: 28, fontWeight: '700', color: D.text,
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: D.border,
+    marginBottom: 4,
+  },
+  nameCounter: { fontSize: 11, color: D.textHint, textAlign: 'right', marginBottom: 12 },
+
+  previewCard: {
+    borderRadius: 16, padding: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+  },
+  previewIconCircle: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: 'rgba(0,0,0,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  previewName: { fontSize: 16, fontWeight: '700', color: '#fff' },
+  previewSub: { fontSize: 13, color: 'rgba(255,255,255,0.8)', marginTop: 2 },
+  previewEdit: { fontSize: 16, color: 'rgba(255,255,255,0.7)' },
+  previewDesc: { fontSize: 13, color: D.textSub, marginTop: 6, paddingHorizontal: 4 },
+
+  sectionTitle: { fontSize: 13, fontWeight: '600', color: D.textSub, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionCard: { backgroundColor: D.surface, borderRadius: 14, overflow: 'hidden' },
+
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingHorizontal: 14, paddingVertical: 13,
+    borderBottomWidth: 0.5, borderBottomColor: D.border,
+  },
+  rowIcon: { width: 30, height: 30, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  rowLabel: { flex: 1, fontSize: 15, fontWeight: '500', color: D.text },
+  rowRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  rowValue: { fontSize: 15, color: D.textSub, maxWidth: 140 },
+  rowChevron: { fontSize: 20, color: D.textSub, marginRight: -4 },
+
+  inlineSelector: {
+    flexDirection: 'row', gap: 6,
+    paddingHorizontal: 14, paddingBottom: 12,
+  },
+  inlineBtn: {
+    flex: 1, paddingVertical: 8, borderRadius: 8,
+    backgroundColor: D.surface2, alignItems: 'center',
+  },
+  inlineBtnText: { fontSize: 12, fontWeight: '600', color: D.textSub },
+
+  nDaysInput: {
+    backgroundColor: D.surface2, borderRadius: 8,
+    paddingHorizontal: 14, paddingVertical: 8,
+    fontSize: 16, fontWeight: '700', color: D.text, width: 60, textAlign: 'center',
+  },
+
+  goalRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingBottom: 14 },
+  goalInput: {
+    backgroundColor: D.surface2, borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 8,
+    fontSize: 20, fontWeight: '700', color: D.text, width: 80, textAlign: 'center',
+  },
+  unitChip: {
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20,
+    borderWidth: 1, borderColor: D.border, backgroundColor: D.surface2,
+  },
+  unitText: { fontSize: 13, color: D.textSub, fontWeight: '600' },
+
+  diffBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: D.surface2, alignItems: 'center', justifyContent: 'center',
+  },
+  diffText: { fontSize: 14, fontWeight: '700', color: D.textSub },
+});
+
+// ─── Picker styles ────────────────────────────────────────────────────────────
+
+const pickerStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: D.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingBottom: 36, paddingTop: 12, maxHeight: '80%',
+  },
+  handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: D.border, alignSelf: 'center', marginBottom: 16 },
+  title: { fontSize: 18, fontWeight: '700', color: D.text, marginBottom: 16 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 20 },
+  cell: {
+    width: 54, height: 54, borderRadius: 14,
+    backgroundColor: D.surface2, borderWidth: 1.5, borderColor: 'transparent',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  colorPreview: { borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginBottom: 16 },
+  colorPreviewText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  colorGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, paddingBottom: 8 },
+  colorDot: {
+    width: 46, height: 46, borderRadius: 23,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2.5, borderColor: 'transparent',
+  },
+  colorDotActive: { borderColor: '#fff', transform: [{ scale: 1.12 }] },
+});
+
+// ─── Reorderable list ─────────────────────────────────────────────────────────
+
+function ReorderableHabitList({ habits, onReorder, onEdit, onDelete }: {
+  habits: Habit[];
+  onReorder: (next: Habit[]) => void;
+  onEdit: (h: Habit) => void;
+  onDelete: (h: Habit) => void;
+}) {
+  const freqLabel = (h: Habit) =>
+    h.frequency === 'daily' ? 'Daily' :
+    h.frequency === 'specific' ? (h.days ?? []).map(d => DAY_NAMES[d]).join(', ') || 'No days' :
+    `Every ${h.nDays} days`;
+
+  const moveUp = (idx: number) => {
+    if (idx === 0) return;
+    const next = [...habits];
+    [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+    onReorder(next);
+  };
+  const moveDown = (idx: number) => {
+    if (idx === habits.length - 1) return;
+    const next = [...habits];
+    [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+    onReorder(next);
+  };
+
+  return (
+    <View>
+      {habits.map((habit, idx) => (
+        <View key={habit.id} style={listStyles.row}>
+          {/* Arrows */}
+          <View style={listStyles.arrows}>
+            <TouchableOpacity onPress={() => moveUp(idx)} disabled={idx === 0}
+              style={[listStyles.arrowBtn, idx === 0 && { opacity: 0.2 }]}>
+              <Text style={listStyles.arrowText}>▲</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => moveDown(idx)} disabled={idx === habits.length - 1}
+              style={[listStyles.arrowBtn, idx === habits.length - 1 && { opacity: 0.2 }]}>
+              <Text style={listStyles.arrowText}>▼</Text>
+            </TouchableOpacity>
+          </View>
+          {/* Icon */}
+          <View style={[listStyles.iconCircle, { backgroundColor: habit.color + '33' }]}>
+            <Text style={{ fontSize: 20 }}>{habit.icon || '⭐'}</Text>
+          </View>
+          {/* Info */}
+          <View style={{ flex: 1 }}>
+            <Text style={listStyles.name} numberOfLines={1}>{habit.name}</Text>
+            <Text style={listStyles.sub}>{freqLabel(habit)}{habit.quantity ? ` · ${habit.goalQty} ${habit.unit}` : ''}</Text>
+          </View>
+          {/* Actions */}
+          <TouchableOpacity onPress={() => onEdit(habit)} style={listStyles.actionBtn}>
+            <Text style={{ fontSize: 17, color: D.textSub }}>✎</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => onDelete(habit)} style={listStyles.actionBtn}>
+            <Text style={{ fontSize: 17, color: '#FF453A' }}>🗑</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const listStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: D.surface, borderRadius: 14,
+    padding: 12, marginBottom: 8,
+  },
+  arrows: { gap: 3 },
+  arrowBtn: { width: 22, height: 22, borderRadius: 6, backgroundColor: D.surface2, alignItems: 'center', justifyContent: 'center' },
+  arrowText: { fontSize: 9, color: '#6C63FF', fontWeight: '700' },
+  iconCircle: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  name: { fontSize: 15, fontWeight: '600', color: D.text },
+  sub: { fontSize: 12, color: D.textSub, marginTop: 2 },
+  actionBtn: { padding: 5 },
+});
+
+// ─── Full-screen Form Modal ───────────────────────────────────────────────────
+
+function FormModal({ visible, initial, onSave, onClose }: {
+  visible: boolean; initial?: HabitFormData;
+  onSave: (data: HabitFormData) => void; onClose: () => void;
+}) {
+  return (
+    <Modal visible={visible} animationType="slide" presentationStyle="fullScreen">
+      <StatusBar barStyle="light-content" />
+      {/* View noire full screen — insets gérés manuellement dans HabitForm */}
+      <View style={{ flex: 1, backgroundColor: D.bg }}>
+        <HabitForm initial={initial} onSave={onSave} onClose={onClose} />
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Habits Screen ────────────────────────────────────────────────────────────
+
+export default function HabitsScreen() {
+  const { habits, addHabit, updateHabit, deleteHabit, reorderHabits } = useHabits();
+  const [addOpen,   setAddOpen]   = useState(false);
+  const [editHabit, setEditHabit] = useState<Habit | null>(null);
+
+  const handleAdd  = (data: HabitFormData) => { addHabit(data);  setAddOpen(false); };
+  const handleEdit = (data: HabitFormData) => {
+    if (editHabit) { updateHabit({ ...editHabit, ...data }); setEditHabit(null); }
+  };
+  const handleDelete = (habit: Habit) => {
+    Alert.alert('Delete', `Delete "${habit.name}"? All progress will be lost.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteHabit(habit.id) },
+    ]);
+  };
+
+  return (
+    <SafeAreaView style={screenStyles.container} edges={['top']}>
+      <StatusBar barStyle="light-content" />
+
+      {/* Header */}
+      <View style={screenStyles.header}>
+        <Text style={screenStyles.title}>My Habits</Text>
+        <TouchableOpacity style={screenStyles.addBtn} onPress={() => setAddOpen(true)}>
+          <Text style={screenStyles.addBtnText}>+ Add</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView contentContainerStyle={screenStyles.scroll} showsVerticalScrollIndicator={false}>
+        <Text style={screenStyles.hint}>Use ▲ ▼ to reorder</Text>
+        {habits.length === 0 ? (
+          <View style={screenStyles.empty}>
+            <Text style={{ fontSize: 52, marginBottom: 14 }}>✨</Text>
+            <Text style={screenStyles.emptyTitle}>No habits yet</Text>
+            <Text style={screenStyles.emptySub}>Tap + Add to get started</Text>
+          </View>
+        ) : (
+          <ReorderableHabitList
+            habits={habits} onReorder={reorderHabits}
+            onEdit={setEditHabit} onDelete={handleDelete}
+          />
+        )}
+      </ScrollView>
+
+      <FormModal visible={addOpen} onSave={handleAdd} onClose={() => setAddOpen(false)} />
+      <FormModal visible={!!editHabit} initial={editHabit ?? undefined}
+        onSave={handleEdit} onClose={() => setEditHabit(null)} />
+    </SafeAreaView>
+  );
+}
+
+const screenStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: D.bg },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 12,
+  },
+  title: { fontSize: 28, fontWeight: '700', color: D.text, letterSpacing: -0.5 },
+  addBtn: { backgroundColor: '#6C63FF', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 9 },
+  addBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  scroll: { paddingHorizontal: 20, paddingBottom: 100 },
+  hint: { fontSize: 12, color: D.textHint, marginBottom: 12 },
+  empty: { alignItems: 'center', paddingTop: 80 },
+  emptyTitle: { fontSize: 18, fontWeight: '700', color: D.text, marginBottom: 6 },
+  emptySub: { fontSize: 14, color: D.textSub },
 });
